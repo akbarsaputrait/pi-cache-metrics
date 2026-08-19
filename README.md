@@ -33,6 +33,25 @@ npm install -g @akbarsaputrait/pi-cache-insight
 | `/cache` | Show session summary (hit rate, tokens, savings, settings) |
 | `/cache-settings` | Open interactive TUI settings (up/down to navigate, Enter to cycle, Esc to close) |
 
+### `/cache` example output
+
+```
+Cache Insight — session summary
+provider/model: OpencodeCombo
+requests: 52  hits: 37  misses: 0  no-cache: 15
+hit rate: 100.0%
+cache read tokens: 2626560
+cache write tokens: 0
+estimated savings: $0.024
+
+Settings:
+  footer: on (compact)
+  cost precision: 2
+  hit-rate alert: 50%
+  track models: all
+  color theme: auto
+```
+
 ### `/cache-settings` (TUI)
 
 The interactive settings panel includes a short on-screen explanation of caching, plus:
