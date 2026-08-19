@@ -21,14 +21,11 @@ pi -e ./cache-insight.ts
 Or via npm:
 
 ```bash
-pi install npm:@akbarsaputrait/pi-cache-insight
-# alias: pi install npm:@akbarsaputrait/pi-cache-insight
-# run directly: pi -e npm:@akbarsaputrait/pi-cache-insight
+pi install npm:pi-cache-metrics
+# run directly: pi -e npm:pi-cache-metrics
 ```
 
-> Package name alternatives: `pi-cache-insight` is taken on npm; either republish the
-> scoped `@akbarsaputrait/pi-cache-insight` above or pick a fresh unscoped name
-> (e.g. `pi-cache-monitor`, `pi-cache-metrics`) — check availability with `npm view <name>`.
+> Package name: `pi-cache-insight` was taken on npm, so this publishes as `pi-cache-metrics`.
 
 ## Commands
 

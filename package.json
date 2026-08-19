@@ -1,5 +1,5 @@
 {
-  "name": "@akbarsaputrait/pi-cache-insight",
+  "name": "pi-cache-metrics",
   "version": "1.0.0",
   "description": "Live prompt-cache visibility in the Pi footer — hit/miss rates, token usage, and estimated cost savings",
   "main": "cache-insight.ts",
