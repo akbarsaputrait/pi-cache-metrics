@@ -31,21 +31,34 @@ pi install npm:pi-cache-metrics
 
 | Command | Description |
 |---------|-------------|
-| `/cache` | Show session summary (hit rate, tokens, savings, per-model breakdown) |
-| `/cache-log` | Show recent requests (last 50) with ASCII hit-rate trend chart |
+| `/cache` | Show session summary (hit rate, tokens, savings, per-model breakdown, hit-rate trend chart) |
+| `/cache-log` | Show recent requests (last 10 of 50 kept) |
 | `/cache-settings` | Open interactive TUI settings (up/down to navigate, Enter to cycle, Esc to close) |
 
-### `/cache-log` example output
+### `/cache` example output
 
 ```
-Cache Metrics — recent requests
+Cache Metrics — session summary
+provider/model: anthropic/claude-sonnet-4-5
+requests: 52  hits: 37  misses: 0  no-cache: 15
+hit rate: 100.0%
+cache read tokens: 2626560
+cache write tokens: 0
+estimated savings: $0.024
+
+Per-model:
+  anthropic/claude-sonnet-4-5: 52 req, 100% hit, $0.024 saved
+
+Settings:
+  footer: on (compact)
+  cost precision: 2
+  hit-rate alert: 50%
+  track models: all
+  color theme: auto
 
 hit-rate trend (oldest → newest):
 ▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▇█▇▆
-
-12:01  anthropic/claude-sonnet-4-5  hit    read 64000  write 0      $0.0001
-12:04  anthropic/claude-sonnet-4-5  miss   read 0     write 32000  $0.0000
-12:08  anthropic/claude-sonnet-4-5  hit    read 96000  write 0      $0.0002
+  ▁ low · █ high · . no cache-eligible requests
 ```
 
 ### `/cache` example output
@@ -88,7 +101,8 @@ The interactive settings panel includes a short on-screen explanation of caching
 - **Branch-safe persistence** — state stored as `appendEntry` custom entries, survives `/reload` and session forks
 - **Hit-rate alerts** — optional notification when rate drops below threshold
 - **Per-model breakdown** — `/cache` shows aggregates per model
-- **ASCII trend chart** — `/cache-log` renders hit rate over time (blocks ▁→█, `.` = no cache-eligible requests)
+- **ASCII trend chart** — `/cache` renders hit rate over time (blocks ▁→█, `.` = no cache-eligible requests)
+- **Bounded log** — `/cache-log` keeps the last 50 requests in memory, shows the latest 10
 
 ## Data Source
 

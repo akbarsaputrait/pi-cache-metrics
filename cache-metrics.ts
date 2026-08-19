@@ -397,27 +397,28 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("cache", {
 		description: "Show prompt-cache statistics for this session",
 		handler: async (_args, ctx) => {
-			if (ctx.hasUI) ctx.ui.notify(report(totals, modelStats), "info");
-			else console.log(report(totals, modelStats));
+			const chart = history.length > 0
+				? ["", "hit-rate trend (oldest → newest):", hitRateTrend(history), `  ▁ low · █ high · . no cache-eligible requests`].join("\n")
+				: "";
+			const out = report(totals, modelStats) + chart;
+			if (ctx.hasUI) ctx.ui.notify(out, "info");
+			else console.log(out);
 		},
 	});
 
 	pi.registerCommand("cache-log", {
-		description: "Show recent cache requests (last 50) with hit-rate chart",
+		description: "Show recent cache requests (last 10 of 50 kept)",
 		handler: async (_args, ctx) => {
 			if (history.length === 0) {
 				if (ctx.hasUI) ctx.ui.notify("Cache Metrics: no requests logged yet", "info");
 				else console.log("Cache Metrics: no requests logged yet");
 				return;
 			}
-			const lines = history.map(h =>
+			const lines = history.slice(-10).map(h =>
 				`${h.time}  ${h.model}  ${h.kind.padEnd(4)}  read ${h.cacheRead}  write ${h.cacheWrite}  $${h.saved.toFixed(settings.costPrecision)}`,
 			);
 			const out = [
-				"Cache Metrics — recent requests",
-				"",
-				`hit-rate trend (oldest → newest):`,
-				`${hitRateTrend(history)}`,
+				`Cache Metrics — last ${lines.length} requests (capped at ${HISTORY_MAX} kept)`,
 				"",
 				...lines,
 			].join("\n");
