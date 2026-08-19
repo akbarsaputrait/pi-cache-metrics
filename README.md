@@ -2,6 +2,8 @@
 
 Live prompt-cache visibility in the Pi footer. Tracks hit/miss rates, cache token usage, and estimated cost savings across the session.
 
+**What is prompt caching?** Providers reuse your context prefix (system prompt + tools + conversation history) across requests. A **cache hit** (high hit-rate) means those tokens were served from cache instead of reprocessed — faster responses, lower cost. **Misses** write new tokens into the cache for future reuse.
+
 ## Install
 
 Auto-discovered from `~/.pi/agent/extensions/` (hot-reload via `/reload`):
@@ -16,34 +18,32 @@ Or quick-test a single run:
 pi -e ./cache-insight.ts
 ```
 
+Or via npm (scoped package):
+
+```bash
+npm install -g @akbarsaputrait/pi-cache-insight
+# then copy cache-insight.ts from node_modules to ~/.pi/agent/extensions/
+# or run directly: pi -e ./node_modules/@akbarsaputrait/pi-cache-insight/cache-insight.ts
+```
+
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `/cache` | Show session summary (hit rate, tokens, savings, settings) |
-| `/cache-settings` | Configure display and alerts |
+| `/cache-settings` | Open interactive TUI settings (up/down to navigate, Enter to cycle, Esc to close) |
 
-### `/cache-settings` options
+### `/cache-settings` (TUI)
 
-```
-footer [on|off|compact|detailed|toggle]   # Show/hide footer, change format
-precision <0-6>                           # Decimal places for savings
-alert <0-100|off>                         # Warn when hit-rate drops below threshold
-models <all|csv>                          # Track specific models (e.g. claude,gpt)
-color <auto|mono|color>                   # Footer coloring
-reset                                      # Reset stats & settings to defaults
-show                                       # Print current report + settings
-```
+The interactive settings panel includes a short on-screen explanation of caching, plus:
 
-Examples:
-```
-/cache-settings footer detailed
-/cache-settings precision 2
-/cache-settings alert 60
-/cache-settings models claude,gpt
-/cache-settings color mono
-/cache-settings reset
-```
+| Setting | Values |
+|---------|--------|
+| Show Footer | `on` / `off` |
+| Footer Format | `compact` / `detailed` |
+| Cost Precision (decimals) | `0`–`6` |
+| Hit-Rate Alert Threshold (%) | `off` / `10`–`100` |
+| Color Theme | `auto` / `mono` / `color` |
 
 ## Features
 
@@ -53,23 +53,24 @@ Examples:
 - **Color-coded** — green ≥70%, yellow 40-69%, dim <40% (mono mode available)
 - **Branch-safe persistence** — state stored as `appendEntry` custom entries, survives `/reload` and session forks
 - **Hit-rate alerts** — optional notification when rate drops below threshold
-- **Model filtering** — track all models or specific ones
 
 ## Data Source
 
 Hooks `message_end` → `event.message.usage`. Pi normalizes per-provider cache tokens (Anthropic `cache_read_input_tokens`, OpenAI cache usage, etc.) into a single `Usage` object. This is more robust than parsing provider-specific headers, which the docs note are not uniformly exposed across providers/transports.
 
+**Savings** are estimated by looking up the model's input rate from `ctx.model`, the model registry, or inferring from usage — whichever is available.
+
 ## Self-Test
 
 ```bash
-CACHE_DEBUG_SELFTEST=1 pi -e ~/.pi/agent/extensions/cache-insight.ts -p '1+1'
+CACHE_DEBUG_SELFTEST=1 pi -e ./cache-insight.ts -p '1+1'
 # [cache-insight] selfTest: 9 assertions passed
 ```
 
 Or standalone (no Pi, no keys):
 
 ```bash
-bun run ~/.pi/agent/cache-insight.test.ts
+bun run cache-insight.test.ts
 ```
 
 ## License
