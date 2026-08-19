@@ -1,0 +1,32 @@
+{
+  "name": "pi-cache-insight",
+  "version": "1.0.0",
+  "description": "Live prompt-cache visibility in the Pi footer — hit/miss rates, token usage, and estimated cost savings",
+  "main": "cache-insight.ts",
+  "types": "cache-insight.ts",
+  "scripts": {
+    "test": "bun run cache-insight.test.ts",
+    "test:self": "CACHE_DEBUG_SELFTEST=1 pi -e ./cache-insight.ts -p '1+1'"
+  },
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "cache",
+    "prompt-cache",
+    "token-usage",
+    "cost-tracking"
+  ],
+  "author": "Akbar Saputrait",
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "cache-insight.ts",
+    "cache-insight.README.md"
+  ]
+}

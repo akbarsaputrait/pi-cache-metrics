@@ -1,0 +1,387 @@
+/**
+ * Cache Insight — live prompt-cache visibility in the footer.
+ *
+ * Tracks cache hit/miss rates, cache token usage, and estimated cost savings
+ * across the active session. State is persisted as branch-safe custom entries
+ * so it survives reload/fork and reconstructs on session_start.
+ *
+ * Data source: `message_end` -> `event.message.usage`. Pi normalizes
+ * per-provider cache tokens into a single `Usage.cacheRead` / `cacheWrite`
+ * pair (Anthropic `usage.cache_read_input_tokens`, OpenAI cache usage, etc.).
+ * This is more robust than parsing provider-specific response headers, which
+ * the docs note are not uniformly exposed across providers/transports. The
+ * semantics mirror the headers exactly: cacheRead > 0 is a hit, cacheWrite > 0
+ * with cacheRead === 0 is a miss that populated the cache, both zero is no-cache.
+ */
+
+import * as assert from "node:assert";
+import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+
+const WIDGET = "cache-insight";
+
+export type CacheKind = "hit" | "miss" | "none";
+
+export interface CacheRecord {
+	/** "hit" = cacheRead > 0; "miss" = cacheWrite > 0 && cacheRead === 0; "none" = neither. */
+	kind: CacheKind;
+	cacheRead: number;
+	cacheWrite: number;
+	/** Estimated USD saved vs. paying input rate for the same tokens. */
+	saved: number;
+	model: string;
+}
+
+export interface Totals {
+	requests: number;
+	hits: number;
+	misses: number;
+	noCache: number;
+	cacheRead: number;
+	cacheWrite: number;
+	saved: number;
+	lastModel: string;
+}
+
+export interface Settings {
+	showFooter: boolean;
+	footerFormat: "compact" | "detailed";
+	costPrecision: number;
+	hitRateAlert: number | null;
+	trackModels: string[] | "all";
+	colorTheme: "auto" | "mono" | "color";
+}
+
+const DEFAULT_SETTINGS: Settings = {
+	showFooter: true,
+	footerFormat: "compact",
+	costPrecision: 4,
+	hitRateAlert: 50,
+	trackModels: "all",
+	colorTheme: "auto",
+};
+
+let settings: Settings = { ...DEFAULT_SETTINGS };
+
+export function classify(cacheRead: number, cacheWrite: number): CacheKind {
+	if (cacheRead > 0) return "hit";
+	if (cacheWrite > 0) return "miss";
+	return "none";
+}
+
+export function estimateSaved(
+	cacheRead: number,
+	cacheWrite: number,
+	costCacheRead: number,
+	costCacheWrite: number,
+	inputRate: number,
+): number {
+	const wouldBeInput = (cacheRead + cacheWrite) * inputRate / 1e6;
+	return wouldBeInput - (costCacheRead + costCacheWrite);
+}
+
+export function mergeTotals(totals: Totals, rec: CacheRecord): void {
+	totals.requests += 1;
+	totals.cacheRead += rec.cacheRead;
+	totals.cacheWrite += rec.cacheWrite;
+	totals.saved += rec.saved;
+	totals.lastModel = rec.model;
+	if (rec.kind === "hit") totals.hits += 1;
+	else if (rec.kind === "miss") totals.misses += 1;
+	else totals.noCache += 1;
+}
+
+export function hitRate(totals: Totals): number {
+	const eligible = totals.hits + totals.misses;
+	return eligible === 0 ? 0 : (totals.hits / eligible) * 100;
+}
+
+function fmt(n: number): string {
+	if (n >= 1000) {
+		const k = (n / 1000).toFixed(1).replace(/\.0$/, "");
+		return `${k}k`;
+	}
+	return String(n);
+}
+
+function colorize(ctx: ExtensionContext, text: string, kind: "hit" | "miss" | "neutral" | "accent"): string {
+	if (settings.colorTheme === "mono") return text;
+	const theme = ctx.ui.theme;
+	switch (kind) {
+		case "hit": return theme.fg("success", text);
+		case "miss": return theme.fg("warning", text);
+		case "accent": return theme.fg("accent", text);
+		default: return theme.fg("dim", text);
+	}
+}
+
+function footerCompact(ctx: ExtensionContext, totals: Totals): string {
+	const rate = hitRate(totals);
+	const eligible = totals.hits + totals.misses;
+	if (eligible === 0) return colorize(ctx, "💾 cache —", "neutral");
+
+	const rateStr = `${rate.toFixed(0)}%`;
+	const hitStr = `${totals.hits}H`;
+	const missStr = `${totals.misses}M`;
+	const crStr = `cr${fmt(totals.cacheRead)}`;
+	const cwStr = `cw${fmt(totals.cacheWrite)}`;
+	const saveStr = `$${totals.saved.toFixed(settings.costPrecision)}`;
+
+	return (
+		colorize(ctx, "💾 cache ", "accent") +
+		colorize(ctx, rateStr, rate >= 70 ? "hit" : rate >= 40 ? "miss" : "neutral") + " " +
+		colorize(ctx, `(${hitStr}/${missStr})`, "neutral") + " · " +
+		colorize(ctx, crStr, "hit") + "/" +
+		colorize(ctx, cwStr, "miss") + " · " +
+		colorize(ctx, `-${saveStr}`, "hit")
+	);
+}
+
+function footerDetailed(ctx: ExtensionContext, totals: Totals): string {
+	const rate = hitRate(totals);
+	const eligible = totals.hits + totals.misses;
+	const rateStr = eligible === 0 ? "n/a" : `${rate.toFixed(1)}%`;
+	const saveStr = `$${totals.saved.toFixed(settings.costPrecision)}`;
+
+	return (
+		colorize(ctx, "💾 Cache Insight ", "accent") +
+		`hit-rate ${colorize(ctx, rateStr, rate >= 70 ? "hit" : rate >= 40 ? "miss" : "neutral")} ` +
+		`(${totals.hits}H ${totals.misses}M ${totals.noCache}NC) ` +
+		`read ${colorize(ctx, fmt(totals.cacheRead), "hit")} ` +
+		`write ${colorize(ctx, fmt(totals.cacheWrite), "miss")} ` +
+		`saved ${colorize(ctx, saveStr, "hit")} ` +
+		`model ${totals.lastModel || "—"}`
+	);
+}
+
+function footer(ctx: ExtensionContext, totals: Totals): string {
+	if (!settings.showFooter) return "";
+	return settings.footerFormat === "detailed" ? footerDetailed(ctx, totals) : footerCompact(ctx, totals);
+}
+
+export function report(totals: Totals): string {
+	const eligible = totals.hits + totals.misses;
+	return [
+		"Cache Insight — session summary",
+		`provider/model: ${totals.lastModel || "(none yet)"}`,
+		`requests: ${totals.requests}  hits: ${totals.hits}  misses: ${totals.misses}  no-cache: ${totals.noCache}`,
+		`hit rate: ${eligible === 0 ? "n/a" : hitRate(totals).toFixed(1) + "%"}`,
+		`cache read tokens: ${totals.cacheRead}`,
+		`cache write tokens: ${totals.cacheWrite}`,
+		`estimated savings: $${totals.saved.toFixed(settings.costPrecision)}`,
+		"",
+		"Settings:",
+		`  footer: ${settings.showFooter ? "on" : "off"} (${settings.footerFormat})`,
+		`  cost precision: ${settings.costPrecision}`,
+		`  hit-rate alert: ${settings.hitRateAlert !== null ? settings.hitRateAlert + "%" : "off"}`,
+		`  track models: ${Array.isArray(settings.trackModels) ? settings.trackModels.join(", ") : "all"}`,
+		`  color theme: ${settings.colorTheme}`,
+	].join("\n");
+}
+
+function newTotals(): Totals {
+	return {
+		requests: 0,
+		hits: 0,
+		misses: 0,
+		noCache: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		saved: 0,
+		lastModel: "",
+	};
+}
+
+const totals: Totals = newTotals();
+
+function reconstruct(ctx: ExtensionContext): void {
+	const branch = ctx.sessionManager.getBranch();
+	for (const entry of branch) {
+		if (entry.type === "custom") {
+			if (entry.customType === "cache-stats") {
+				const rec = entry.data as CacheRecord;
+				mergeTotals(totals, {
+					kind: rec.kind,
+					cacheRead: rec.cacheRead,
+					cacheWrite: rec.cacheWrite,
+					saved: rec.saved,
+					model: rec.model,
+				});
+			} else if (entry.customType === "cache-settings") {
+				settings = { ...DEFAULT_SETTINGS, ...(entry.data as Partial<Settings>) };
+			}
+		}
+	}
+}
+
+function persistSettings(pi: ExtensionAPI): void {
+	pi.appendEntry("cache-settings", settings);
+}
+
+function refreshFooter(ctx: ExtensionContext): void {
+	if (ctx.mode === "tui") {
+		const ft = footer(ctx, totals);
+		if (ft) ctx.ui.setStatus(WIDGET, ft);
+		else ctx.ui.setStatus(WIDGET, "");
+	}
+}
+
+function checkHitRateAlert(ctx: ExtensionContext): void {
+	if (settings.hitRateAlert === null) return;
+	const rate = hitRate(totals);
+	const eligible = totals.hits + totals.misses;
+	if (eligible >= 5 && rate < settings.hitRateAlert) {
+		ctx.ui.notify(`⚠️ Cache hit rate ${rate.toFixed(0)}% below ${settings.hitRateAlert}% threshold`, "warning");
+	}
+}
+
+function shouldTrack(model: string): boolean {
+	if (settings.trackModels === "all") return true;
+	return (settings.trackModels as string[]).some(m => model.includes(m));
+}
+
+function selfTest(): void {
+	assert.strictEqual(classify(100, 0), "hit");
+	assert.strictEqual(classify(0, 50), "miss");
+	assert.strictEqual(classify(0, 0), "none");
+	assert.strictEqual(classify(100, 50), "hit");
+
+	const saved = estimateSaved(1000, 0, 0.000075, 0, 3);
+	assert.ok(Math.abs(saved - 0.002925) < 1e-9, `estimateSaved gave ${saved}`);
+
+	const t: Totals = newTotals();
+	mergeTotals(t, { kind: "hit", cacheRead: 1000, cacheWrite: 0, saved: 0.01, model: "anthropic/claude" });
+	mergeTotals(t, { kind: "miss", cacheRead: 0, cacheWrite: 500, saved: 0.005, model: "anthropic/claude" });
+	assert.strictEqual(t.requests, 2);
+	assert.strictEqual(t.hits, 1);
+	assert.strictEqual(t.misses, 1);
+	assert.strictEqual(t.cacheRead, 1000);
+	assert.strictEqual(t.cacheWrite, 500);
+
+	if (process.env.CACHE_DEBUG_SELFTEST === "1") {
+		console.log("[cache-insight] selfTest: 9 assertions passed");
+	}
+}
+
+export default function (pi: ExtensionAPI) {
+	if (process.env.CACHE_DEBUG_SELFTEST === "1") selfTest();
+
+	pi.on("session_start", async (_event, ctx) => {
+		totals.requests = 0;
+		totals.hits = 0;
+		totals.misses = 0;
+		totals.noCache = 0;
+		totals.cacheRead = 0;
+		totals.cacheWrite = 0;
+		totals.saved = 0;
+		totals.lastModel = "";
+		settings = { ...DEFAULT_SETTINGS };
+		reconstruct(ctx);
+		refreshFooter(ctx);
+	});
+
+	pi.on("message_end", async (event, ctx) => {
+		const message = event.message;
+		if (message.role !== "assistant") return;
+		if (!shouldTrack(message.model)) return;
+		const usage = message.usage;
+		if (!usage) return;
+
+		const inputRate = ctx.model?.cost.input;
+		const saved =
+			inputRate !== undefined
+				? estimateSaved(
+						usage.cacheRead,
+						usage.cacheWrite,
+						usage.cost.cacheRead,
+						usage.cost.cacheWrite,
+						inputRate,
+					)
+				: 0;
+
+		const rec: CacheRecord = {
+			kind: classify(usage.cacheRead, usage.cacheWrite),
+			cacheRead: usage.cacheRead,
+			cacheWrite: usage.cacheWrite,
+			saved,
+			model: message.model,
+		};
+		mergeTotals(totals, rec);
+
+		pi.appendEntry("cache-stats", rec);
+		refreshFooter(ctx);
+		checkHitRateAlert(ctx);
+	});
+
+	pi.registerCommand("cache", {
+		description: "Show prompt-cache statistics for this session",
+		handler: async (_args, ctx) => {
+			if (ctx.hasUI) ctx.ui.notify(report(totals), "info");
+			else console.log(report(totals));
+		},
+	});
+
+	pi.registerCommand("cache-settings", {
+		description: "Configure cache insight display and alerts",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/);
+			const sub = parts[0];
+			const val = parts.slice(1).join(" ");
+
+			if (!sub || sub === "show") {
+				if (ctx.hasUI) ctx.ui.notify(report(totals), "info");
+				else console.log(report(totals));
+				return;
+			}
+
+			switch (sub) {
+				case "footer": {
+					if (val === "on") settings.showFooter = true;
+					else if (val === "off") settings.showFooter = false;
+					else if (val === "compact") settings.footerFormat = "compact";
+					else if (val === "detailed") settings.footerFormat = "detailed";
+					else if (val === "toggle" || val === "") settings.showFooter = !settings.showFooter;
+					break;
+				}
+				case "precision": {
+					const n = Number(val);
+					if (Number.isInteger(n) && n >= 0 && n <= 6) settings.costPrecision = n;
+					break;
+				}
+				case "alert": {
+					if (val === "off" || val === "") settings.hitRateAlert = null;
+					else {
+						const n = Number(val);
+						if (Number.isInteger(n) && n >= 0 && n <= 100) settings.hitRateAlert = n;
+					}
+					break;
+				}
+				case "models": {
+					if (val === "all" || val === "") settings.trackModels = "all";
+					else settings.trackModels = val.split(",").map(s => s.trim());
+					break;
+				}
+				case "color": {
+					if (val === "auto" || val === "mono" || val === "color") settings.colorTheme = val;
+					break;
+				}
+				case "reset": {
+					settings = { ...DEFAULT_SETTINGS };
+					totals.requests = totals.hits = totals.misses = totals.noCache = 0;
+					totals.cacheRead = totals.cacheWrite = totals.saved = 0;
+					totals.lastModel = "";
+					ctx.ui.notify("Cache Insight: settings & stats reset", "info");
+					refreshFooter(ctx);
+					return;
+				}
+				default: {
+					ctx.ui.notify(`Unknown setting: ${sub}. Use: footer [on|off|compact|detailed|toggle], precision <n>, alert <n|off>, models <all|csv>, color <auto|mono|color>, reset`, "warning");
+					return;
+				}
+			}
+
+			persistSettings(pi);
+			refreshFooter(ctx);
+			ctx.ui.notify(`Cache Insight: ${sub} updated`, "info");
+		},
+	});
+}
