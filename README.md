@@ -1,4 +1,4 @@
-# Cache Insight
+# Cache Metrics
 
 Live prompt-cache visibility in the Pi footer. Tracks hit/miss rates, cache token usage, and estimated cost savings across the session.
 
@@ -9,13 +9,13 @@ Live prompt-cache visibility in the Pi footer. Tracks hit/miss rates, cache toke
 Auto-discovered from `~/.pi/agent/extensions/` (hot-reload via `/reload`):
 
 ```bash
-cp cache-insight.ts ~/.pi/agent/extensions/
+cp cache-metrics.ts ~/.pi/agent/extensions/
 ```
 
 Or quick-test a single run:
 
 ```bash
-pi -e ./cache-insight.ts
+pi -e ./cache-metrics.ts
 ```
 
 Or via npm:
@@ -25,19 +25,33 @@ pi install npm:pi-cache-metrics
 # run directly: pi -e npm:pi-cache-metrics
 ```
 
-> Package name: `pi-cache-insight` was taken on npm, so this publishes as `pi-cache-metrics`.
+> Package name: `pi-cache-metrics`. (Originally `pi-cache-insight`, renamed because that name was taken on npm.)
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/cache` | Show session summary (hit rate, tokens, savings, settings) |
+| `/cache` | Show session summary (hit rate, tokens, savings, per-model breakdown) |
+| `/cache-log` | Show recent requests (last 50) with ASCII hit-rate trend chart |
 | `/cache-settings` | Open interactive TUI settings (up/down to navigate, Enter to cycle, Esc to close) |
+
+### `/cache-log` example output
+
+```
+Cache Metrics — recent requests
+
+hit-rate trend (oldest → newest):
+▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▇█▇▆
+
+12:01  anthropic/claude-sonnet-4-5  hit    read 64000  write 0      $0.0001
+12:04  anthropic/claude-sonnet-4-5  miss   read 0     write 32000  $0.0000
+12:08  anthropic/claude-sonnet-4-5  hit    read 96000  write 0      $0.0002
+```
 
 ### `/cache` example output
 
 ```
-Cache Insight — session summary
+Cache Metrics — session summary
 provider/model: anthropic/claude-sonnet-4-5
 requests: 52  hits: 37  misses: 0  no-cache: 15
 hit rate: 100.0%
@@ -73,6 +87,8 @@ The interactive settings panel includes a short on-screen explanation of caching
 - **Color-coded** — green ≥70%, yellow 40-69%, dim <40% (mono mode available)
 - **Branch-safe persistence** — state stored as `appendEntry` custom entries, survives `/reload` and session forks
 - **Hit-rate alerts** — optional notification when rate drops below threshold
+- **Per-model breakdown** — `/cache` shows aggregates per model
+- **ASCII trend chart** — `/cache-log` renders hit rate over time (blocks ▁→█, `.` = no cache-eligible requests)
 
 ## Data Source
 
@@ -83,14 +99,14 @@ Hooks `message_end` → `event.message.usage`. Pi normalizes per-provider cache 
 ## Self-Test
 
 ```bash
-CACHE_DEBUG_SELFTEST=1 pi -e ./cache-insight.ts -p '1+1'
-# [cache-insight] selfTest: 9 assertions passed
+CACHE_DEBUG_SELFTEST=1 pi -e ./cache-metrics.ts -p '1+1'
+# [cache-metrics] selfTest: 9 assertions passed
 ```
 
 Or standalone (no Pi, no keys):
 
 ```bash
-bun run cache-insight.test.ts
+bun run cache-metrics.test.ts
 ```
 
 ## License

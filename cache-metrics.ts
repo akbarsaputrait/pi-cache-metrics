@@ -1,5 +1,5 @@
 /**
- * Cache Insight — live prompt-cache visibility in the footer.
+ * Cache Metrics — live prompt-cache visibility in the footer.
  *
  * Tracks cache hit/miss rates, cache token usage, and estimated cost savings
  * across the active session. State is persisted as branch-safe custom entries
@@ -19,7 +19,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@e
 import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 
-const WIDGET = "cache-insight";
+const WIDGET = "cache-metrics";
 
 export type CacheKind = "hit" | "miss" | "none";
 
@@ -145,7 +145,7 @@ function footerDetailed(ctx: ExtensionContext, totals: Totals): string {
 	const saveStr = `$${totals.saved.toFixed(settings.costPrecision)}`;
 
 	return (
-		colorize(ctx, "💾 Cache Insight ", "accent") +
+		colorize(ctx, "💾 Cache Metrics ", "accent") +
 		`hit-rate ${colorize(ctx, rateStr, rate >= 70 ? "hit" : rate >= 40 ? "miss" : "neutral")} ` +
 		`(${totals.hits}H ${totals.misses}M ${totals.noCache}NC) ` +
 		`read ${colorize(ctx, fmt(totals.cacheRead), "hit")} ` +
@@ -160,24 +160,35 @@ function footer(ctx: ExtensionContext, totals: Totals): string {
 	return settings.footerFormat === "detailed" ? footerDetailed(ctx, totals) : footerCompact(ctx, totals);
 }
 
-export function report(totals: Totals): string {
+export function report(totals: Totals, modelStats?: Map<string, Totals>): string {
 	const eligible = totals.hits + totals.misses;
-	return [
-		"Cache Insight — session summary",
+	const lines = [
+		"Cache Metrics — session summary",
 		`provider/model: ${totals.lastModel || "(none yet)"}`,
 		`requests: ${totals.requests}  hits: ${totals.hits}  misses: ${totals.misses}  no-cache: ${totals.noCache}`,
 		`hit rate: ${eligible === 0 ? "n/a" : hitRate(totals).toFixed(1) + "%"}`,
 		`cache read tokens: ${totals.cacheRead}`,
 		`cache write tokens: ${totals.cacheWrite}`,
 		`estimated savings: $${totals.saved.toFixed(settings.costPrecision)}`,
-		"",
-		"Settings:",
+	];
+
+	if (modelStats && modelStats.size > 0) {
+		lines.push("", "Per-model:");
+		for (const [model, t] of modelStats) {
+			const mEligible = t.hits + t.misses;
+			const rateStr = mEligible === 0 ? "n/a" : hitRate(t).toFixed(0) + "%";
+			lines.push(`  ${model}: ${t.requests} req, ${rateStr} hit, $${t.saved.toFixed(settings.costPrecision)} saved`);
+		}
+	}
+
+	lines.push("", "Settings:",
 		`  footer: ${settings.showFooter ? "on" : "off"} (${settings.footerFormat})`,
 		`  cost precision: ${settings.costPrecision}`,
 		`  hit-rate alert: ${settings.hitRateAlert !== null ? settings.hitRateAlert + "%" : "off"}`,
 		`  track models: ${Array.isArray(settings.trackModels) ? settings.trackModels.join(", ") : "all"}`,
 		`  color theme: ${settings.colorTheme}`,
-	].join("\n");
+	);
+	return lines.join("\n");
 }
 
 function newTotals(): Totals {
@@ -195,13 +206,68 @@ function newTotals(): Totals {
 
 const totals: Totals = newTotals();
 
+/** Per-model aggregates (model id -> totals). */
+const modelStats: Map<string, Totals> = new Map();
+
+/** Rolling log of recent requests (newest last), capped. */
+const history: Array<{ time: string; model: string; kind: CacheKind; cacheRead: number; cacheWrite: number; saved: number }> = [];
+const HISTORY_MAX = 50;
+
+function record(rec: CacheRecord): void {
+	mergeTotals(totals, rec);
+	let ms = modelStats.get(rec.model);
+	if (!ms) {
+		ms = newTotals();
+		modelStats.set(rec.model, ms);
+	}
+	mergeTotals(ms, rec);
+	history.push({
+		time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+		model: rec.model,
+		kind: rec.kind,
+		cacheRead: rec.cacheRead,
+		cacheWrite: rec.cacheWrite,
+		saved: rec.saved,
+	});
+	if (history.length > HISTORY_MAX) history.splice(0, history.length - HISTORY_MAX);
+}
+
+type HistoryEntry = { time: string; model: string; kind: CacheKind; cacheRead: number; cacheWrite: number; saved: number };
+
+/**
+ * ASCII hit-rate trend chart (oldest → newest). Buckets the history into
+ * columns; each column shows the hit rate for that window.
+ * Column heights: blocks ▁▂▃▄▅▆▇█ (0-100% hit rate), `.` = no cache-eligible
+ * requests in that window.
+ */
+export function hitRateTrend(hist: HistoryEntry[], cols = 24): string {
+	if (hist.length === 0) return "(no data)";
+	const n = Math.min(cols, hist.length);
+	const size = Math.ceil(hist.length / n);
+	const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+	const out: string[] = [];
+	for (let i = 0; i < n; i++) {
+		const slice = hist.slice(i * size, (i + 1) * size);
+		let hits = 0, eligible = 0;
+		for (const h of slice) {
+			if (h.kind === "hit") { hits++; eligible++; }
+			else if (h.kind === "miss") eligible++;
+		}
+		if (eligible === 0) { out.push("."); continue; }
+		const rate = hits / eligible;
+		const idx = Math.min(blocks.length - 1, Math.round(rate * (blocks.length - 1)));
+		out.push(blocks[idx]);
+	}
+	return out.join("");
+}
+
 function reconstruct(ctx: ExtensionContext): void {
 	const branch = ctx.sessionManager.getBranch();
 	for (const entry of branch) {
 		if (entry.type === "custom") {
 			if (entry.customType === "cache-stats") {
 				const rec = entry.data as CacheRecord;
-				mergeTotals(totals, {
+				record({
 					kind: rec.kind,
 					cacheRead: rec.cacheRead,
 					cacheWrite: rec.cacheWrite,
@@ -260,7 +326,7 @@ function selfTest(): void {
 	assert.strictEqual(t.cacheWrite, 500);
 
 	if (process.env.CACHE_DEBUG_SELFTEST === "1") {
-		console.log("[cache-insight] selfTest: 9 assertions passed");
+		console.log("[cache-metrics] selfTest: 9 assertions passed");
 	}
 }
 
@@ -321,7 +387,7 @@ export default function (pi: ExtensionAPI) {
 			saved,
 			model: message.model,
 		};
-		mergeTotals(totals, rec);
+		record(rec);
 
 		pi.appendEntry("cache-stats", rec);
 		refreshFooter(ctx);
@@ -331,13 +397,37 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("cache", {
 		description: "Show prompt-cache statistics for this session",
 		handler: async (_args, ctx) => {
-			if (ctx.hasUI) ctx.ui.notify(report(totals), "info");
-			else console.log(report(totals));
+			if (ctx.hasUI) ctx.ui.notify(report(totals, modelStats), "info");
+			else console.log(report(totals, modelStats));
+		},
+	});
+
+	pi.registerCommand("cache-log", {
+		description: "Show recent cache requests (last 50) with hit-rate chart",
+		handler: async (_args, ctx) => {
+			if (history.length === 0) {
+				if (ctx.hasUI) ctx.ui.notify("Cache Metrics: no requests logged yet", "info");
+				else console.log("Cache Metrics: no requests logged yet");
+				return;
+			}
+			const lines = history.map(h =>
+				`${h.time}  ${h.model}  ${h.kind.padEnd(4)}  read ${h.cacheRead}  write ${h.cacheWrite}  $${h.saved.toFixed(settings.costPrecision)}`,
+			);
+			const out = [
+				"Cache Metrics — recent requests",
+				"",
+				`hit-rate trend (oldest → newest):`,
+				`${hitRateTrend(history)}`,
+				"",
+				...lines,
+			].join("\n");
+			if (ctx.hasUI) ctx.ui.notify(out, "info");
+			else console.log(out);
 		},
 	});
 
 	pi.registerCommand("cache-settings", {
-		description: "Interactive TUI settings for Cache Insight",
+		description: "Interactive TUI settings for Cache Metrics",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify("/cache-settings requires TUI mode", "error");
@@ -379,11 +469,11 @@ export default function (pi: ExtensionAPI) {
 				];
 
 				const container = new Container();
-				// Help text explaining cache insight
+				// Help text explaining cache metrics
 				container.addChild(new (class {
 					render(width: number) {
 						const lines = [
-							theme.fg("accent", theme.bold("Cache Insight Settings")),
+							theme.fg("accent", theme.bold("Cache Metrics Settings")),
 							theme.fg("dim", "Prompt caching reuses your context prefix (system prompt + tools + history)"),
 							theme.fg("dim", "across requests. High hit-rate = faster responses, lower cost."),
 							"",

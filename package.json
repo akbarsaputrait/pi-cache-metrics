@@ -2,11 +2,11 @@
   "name": "pi-cache-metrics",
   "version": "1.0.0",
   "description": "Live prompt-cache visibility in the Pi footer — hit/miss rates, token usage, and estimated cost savings",
-  "main": "cache-insight.ts",
-  "types": "cache-insight.ts",
+  "main": "cache-metrics.ts",
+  "types": "cache-metrics.ts",
   "scripts": {
-    "test": "bun run cache-insight.test.ts",
-    "test:self": "CACHE_DEBUG_SELFTEST=1 pi -e ./cache-insight.ts -p '1+1'"
+    "test": "bun run cache-metrics.test.ts",
+    "test:self": "CACHE_DEBUG_SELFTEST=1 pi -e ./cache-metrics.ts -p '1+1'"
   },
   "keywords": [
     "pi",
@@ -26,8 +26,8 @@
     "node": ">=20.0.0"
   },
   "files": [
-    "cache-insight.ts",
-    "cache-insight.README.md"
+    "cache-metrics.ts",
+    "README.md"
   ],
   "publishConfig": {
     "access": "public"
