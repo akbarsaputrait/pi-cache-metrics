@@ -18,13 +18,17 @@ Or quick-test a single run:
 pi -e ./cache-insight.ts
 ```
 
-Or via npm (scoped package):
+Or via npm:
 
 ```bash
-npm install -g @akbarsaputrait/pi-cache-insight
-# then copy cache-insight.ts from node_modules to ~/.pi/agent/extensions/
-# or run directly: pi -e ./node_modules/@akbarsaputrait/pi-cache-insight/cache-insight.ts
+pi install npm:@akbarsaputrait/pi-cache-insight
+# alias: pi install npm:@akbarsaputrait/pi-cache-insight
+# run directly: pi -e npm:@akbarsaputrait/pi-cache-insight
 ```
+
+> Package name alternatives: `pi-cache-insight` is taken on npm; either republish the
+> scoped `@akbarsaputrait/pi-cache-insight` above or pick a fresh unscoped name
+> (e.g. `pi-cache-monitor`, `pi-cache-metrics`) — check availability with `npm view <name>`.
 
 ## Commands
 
@@ -37,7 +41,7 @@ npm install -g @akbarsaputrait/pi-cache-insight
 
 ```
 Cache Insight — session summary
-provider/model: OpencodeCombo
+provider/model: anthropic/claude-sonnet-4-5
 requests: 52  hits: 37  misses: 0  no-cache: 15
 hit rate: 100.0%
 cache read tokens: 2626560
