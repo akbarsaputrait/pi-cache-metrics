@@ -16,6 +16,8 @@
 
 import * as assert from "node:assert";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { Container, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 
 const WIDGET = "cache-insight";
 
@@ -286,7 +288,21 @@ export default function (pi: ExtensionAPI) {
 		const usage = message.usage;
 		if (!usage) return;
 
-		const inputRate = ctx.model?.cost.input;
+		// Get input rate (per million tokens) from active model or registry lookup
+		let inputRate = ctx.model?.cost?.input;
+		if (inputRate === undefined) {
+			// Try to parse provider/model from message.model and lookup in registry
+			const modelId = message.model;
+			const [provider, ...rest] = modelId.split("/");
+			const modelName = rest.join("/") || modelId;
+			const model = ctx.modelRegistry?.find(provider, modelName);
+			inputRate = model?.cost?.input;
+		}
+		// Fallback: infer from usage if there are non-cached input tokens
+		if (inputRate === undefined && usage.input > 0 && usage.cost.input > 0) {
+			inputRate = (usage.cost.input / usage.input) * 1e6;
+		}
+
 		const saved =
 			inputRate !== undefined
 				? estimateSaved(
@@ -321,67 +337,102 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("cache-settings", {
-		description: "Configure cache insight display and alerts",
-		handler: async (args, ctx) => {
-			const parts = args.trim().split(/\s+/);
-			const sub = parts[0];
-			const val = parts.slice(1).join(" ");
-
-			if (!sub || sub === "show") {
-				if (ctx.hasUI) ctx.ui.notify(report(totals), "info");
-				else console.log(report(totals));
+		description: "Interactive TUI settings for Cache Insight",
+		handler: async (_args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("/cache-settings requires TUI mode", "error");
 				return;
 			}
 
-			switch (sub) {
-				case "footer": {
-					if (val === "on") settings.showFooter = true;
-					else if (val === "off") settings.showFooter = false;
-					else if (val === "compact") settings.footerFormat = "compact";
-					else if (val === "detailed") settings.footerFormat = "detailed";
-					else if (val === "toggle" || val === "") settings.showFooter = !settings.showFooter;
-					break;
-				}
-				case "precision": {
-					const n = Number(val);
-					if (Number.isInteger(n) && n >= 0 && n <= 6) settings.costPrecision = n;
-					break;
-				}
-				case "alert": {
-					if (val === "off" || val === "") settings.hitRateAlert = null;
-					else {
-						const n = Number(val);
-						if (Number.isInteger(n) && n >= 0 && n <= 100) settings.hitRateAlert = n;
-					}
-					break;
-				}
-				case "models": {
-					if (val === "all" || val === "") settings.trackModels = "all";
-					else settings.trackModels = val.split(",").map(s => s.trim());
-					break;
-				}
-				case "color": {
-					if (val === "auto" || val === "mono" || val === "color") settings.colorTheme = val;
-					break;
-				}
-				case "reset": {
-					settings = { ...DEFAULT_SETTINGS };
-					totals.requests = totals.hits = totals.misses = totals.noCache = 0;
-					totals.cacheRead = totals.cacheWrite = totals.saved = 0;
-					totals.lastModel = "";
-					ctx.ui.notify("Cache Insight: settings & stats reset", "info");
-					refreshFooter(ctx);
-					return;
-				}
-				default: {
-					ctx.ui.notify(`Unknown setting: ${sub}. Use: footer [on|off|compact|detailed|toggle], precision <n>, alert <n|off>, models <all|csv>, color <auto|mono|color>, reset`, "warning");
-					return;
-				}
-			}
+			await ctx.ui.custom((_tui, theme, _kb, done) => {
+				const items: SettingItem[] = [
+					{
+						id: "showFooter",
+						label: "Show Footer",
+						currentValue: settings.showFooter ? "on" : "off",
+						values: ["on", "off"],
+					},
+					{
+						id: "footerFormat",
+						label: "Footer Format",
+						currentValue: settings.footerFormat,
+						values: ["compact", "detailed"],
+					},
+					{
+						id: "costPrecision",
+						label: "Cost Precision (decimals)",
+						currentValue: String(settings.costPrecision),
+						values: ["0", "1", "2", "3", "4", "5", "6"],
+					},
+					{
+						id: "hitRateAlert",
+						label: "Hit-Rate Alert Threshold (%)",
+						currentValue: settings.hitRateAlert !== null ? String(settings.hitRateAlert) : "off",
+						values: ["off", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100"],
+					},
+					{
+						id: "colorTheme",
+						label: "Color Theme",
+						currentValue: settings.colorTheme,
+						values: ["auto", "mono", "color"],
+					},
+				];
 
-			persistSettings(pi);
-			refreshFooter(ctx);
-			ctx.ui.notify(`Cache Insight: ${sub} updated`, "info");
+				const container = new Container();
+				// Help text explaining cache insight
+				container.addChild(new (class {
+					render(width: number) {
+						const lines = [
+							theme.fg("accent", theme.bold("Cache Insight Settings")),
+							theme.fg("dim", "Prompt caching reuses your context prefix (system prompt + tools + history)"),
+							theme.fg("dim", "across requests. High hit-rate = faster responses, lower cost."),
+							"",
+						];
+						return lines.map((l, i) => l.padEnd(width)).slice(0, width);
+					}
+					invalidate() {}
+				})());
+
+				const settingsList = new SettingsList(
+					items,
+					items.length + 2,
+					getSettingsListTheme(),
+					(id, newValue) => {
+						switch (id) {
+							case "showFooter":
+								settings.showFooter = newValue === "on";
+								break;
+							case "footerFormat":
+								settings.footerFormat = newValue as "compact" | "detailed";
+								break;
+							case "costPrecision":
+								settings.costPrecision = Number(newValue);
+								break;
+							case "hitRateAlert":
+								settings.hitRateAlert = newValue === "off" ? null : Number(newValue);
+								break;
+							case "colorTheme":
+								settings.colorTheme = newValue as "auto" | "mono" | "color";
+								break;
+						}
+						persistSettings(pi);
+						refreshFooter(ctx);
+					},
+					() => {
+						done(undefined);
+					},
+				);
+
+				container.addChild(settingsList);
+
+				return {
+					render: (width: number) => container.render(width),
+					invalidate: () => container.invalidate(),
+					handleInput: (data: string) => {
+						settingsList.handleInput?.(data);
+					},
+				};
+			});
 		},
 	});
 }
